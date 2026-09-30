@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Exports\LogsheetsExport;
+use App\Exports\LogsheetsSheetExport;
 use App\Models\Logsheet;
 use App\Models\LogsheetDetail;
 use App\Models\LogsheetImport;
@@ -16,9 +18,12 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\View\View;
+use Maatwebsite\Excel\Facades\Excel;
 
 class LogsheetController extends Controller
 {
+    private const IMPORT_PAGE_SIZE = 25;
+
     public function __construct(
         private LogsheetImportService $importService,
         private LogsheetClearingService $clearingService
@@ -81,9 +86,9 @@ class LogsheetController extends Controller
         ]);
     }
 
-    public function records(Request $request): View
+    private function filterRules(): array
     {
-        $request->validate([
+        return [
             'date_from' => ['nullable', 'date_format:Y-m-d'],
             'date_to' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:date_from'],
             'posting_date_from' => ['nullable', 'date_format:Y-m-d'],
@@ -95,8 +100,11 @@ class LogsheetController extends Controller
             'min_amount' => ['nullable', 'numeric', 'min:0'],
             'max_amount' => ['nullable', 'numeric', 'min:0'],
             'status' => ['nullable', 'in:pending,cleared'],
-        ]);
+        ];
+    }
 
+    private function filteredQuery(Request $request): \Illuminate\Database\Eloquent\Builder
+    {
         $query = Logsheet::query()
             ->with(['lastImport', 'details' => fn ($details) => $details->orderBy('id')]);
 
@@ -198,6 +206,15 @@ class LogsheetController extends Controller
             $query->where('total_actual_amount', '<=', $request->input('max_amount'));
         }
 
+        return $query;
+    }
+
+    public function records(Request $request): View
+    {
+        $request->validate($this->filterRules());
+
+        $query = $this->filteredQuery($request);
+
         $sortField = strtolower(trim((string) $request->input('sort', 'date')));
         $sortDirection = strtolower(trim((string) $request->input('direction', 'desc')));
         $allowedSortFields = [
@@ -236,22 +253,82 @@ class LogsheetController extends Controller
         ]);
     }
 
-    public function importShow(LogsheetImport $import): View
+    public function export(Request $request)
     {
+        $validated = $request->validate($this->filterRules() + [
+            'scope' => ['nullable', 'in:all,pending,cleared'],
+            'force_scope' => ['nullable', 'in:all,pending,cleared'],
+        ]);
+
+        // Precedence: explicit override (power users) > applied status filter > legacy scope param.
+        $forceScope = trim((string) $request->input('force_scope', ''));
+        $hasOverride = in_array($forceScope, ['all', 'pending', 'cleared'], true);
+        $status = trim((string) $request->input('status', ''));
+
+        if ($hasOverride) {
+            // An override means "ignore my status filter", otherwise it could only return an empty sheet.
+            $scope = $forceScope;
+            $queryRequest = $request->duplicate();
+            $queryRequest->merge(['status' => null]);
+        } else {
+            $scope = in_array($status, ['pending', 'cleared'], true)
+                ? $status
+                : ($validated['scope'] ?? 'all');
+            $queryRequest = $request;
+        }
+
+        if (! in_array($scope, ['all', 'pending', 'cleared'], true)) {
+            $scope = 'all';
+        }
+
+        try {
+            $export = new LogsheetsExport($this->filteredQuery($queryRequest), $scope);
+
+            $filename = 'logsheets_'.$scope.'_'.now()->format('Y-m-d_His').'.xlsx';
+
+            return Excel::download($export, $filename);
+        } catch (\Throwable $e) {
+            Log::error('Logsheet export failed', [
+                'exception' => $e,
+                'scope' => $scope,
+                'override' => $hasOverride,
+                'status' => $status,
+            ]);
+
+            return back()->with('error', 'Could not export log sheets. Please try again.');
+        }
+    }
+
+    public function importShow(Request $request, LogsheetImport $import): View
+    {
+        $request->validate([
+            'status' => ['nullable', 'in:completed,pending'],
+        ]);
+
+        $scope = $this->importScope($request);
+
         $import->load(['uploader']);
 
-        $logsheets = Logsheet::where('last_import_id', $import->id)
-            ->with(['lastImport'])
+        $logsheetsQuery = Logsheet::where('last_import_id', $import->id)
+            ->with(['lastImport']);
+
+        if ($scope !== 'all') {
+            $logsheetsQuery->where('status', $scope === 'completed' ? 'cleared' : 'pending');
+        }
+
+        $logsheets = $logsheetsQuery
             ->orderBy('log_sheet_no')
-            ->get();
+            ->paginate(self::IMPORT_PAGE_SIZE)
+            ->withQueryString();
 
         $invalidRows = LogsheetRawRow::where('import_id', $import->id)
             ->where('is_valid', false)
             ->orderBy('row_number_in_file')
-            ->get();
+            ->paginate(self::IMPORT_PAGE_SIZE, ['*'], 'invalid_page')
+            ->withQueryString();
 
-        $clearedCount = $logsheets->where('status', 'cleared')->count();
-        $totalCount = $logsheets->count();
+        $totalCount = Logsheet::where('last_import_id', $import->id)->count();
+        $clearedCount = Logsheet::where('last_import_id', $import->id)->where('status', 'cleared')->count();
 
         return view('logsheets.imports.show', [
             'import' => $import,
@@ -259,7 +336,63 @@ class LogsheetController extends Controller
             'invalidRows' => $invalidRows,
             'clearedCount' => $clearedCount,
             'totalCount' => $totalCount,
+            'scope' => $scope,
         ]);
+    }
+
+    public function importExport(Request $request, LogsheetImport $import)
+    {
+        $request->validate([
+            'status' => ['nullable', 'in:completed,pending'],
+            'force_status' => ['nullable', 'in:all,completed,pending'],
+        ]);
+
+        // Precedence: explicit manual override > applied status filter > everything.
+        $forceStatus = trim((string) $request->input('force_status', ''));
+
+        if (in_array($forceStatus, ['all', 'completed', 'pending'], true)) {
+            $scope = $forceStatus;
+        } else {
+            $scope = $this->importScope($request);
+        }
+
+        try {
+            $query = Logsheet::query()->where('last_import_id', $import->id);
+
+            if ($scope === 'all') {
+                $export = new LogsheetsExport($query, 'all');
+            } else {
+                $export = new LogsheetsSheetExport(clone $query, $scope === 'completed' ? 'cleared' : 'pending');
+            }
+
+            $baseName = pathinfo((string) $import->original_filename, PATHINFO_FILENAME);
+            if ($baseName === '') {
+                $baseName = 'import-'.$import->id;
+            }
+            $safeName = preg_replace('/[^A-Za-z0-9_-]+/', '-', $baseName) ?: ('import-'.$import->id);
+            $safeName = trim($safeName, '-');
+            if ($safeName === '') {
+                $safeName = 'import-'.$import->id;
+            }
+            if (strlen($safeName) > 40) {
+                $safeName = trim(substr($safeName, 0, 40), '-');
+            }
+
+            $filename = 'logsheets_import_'.$import->id.'_'.$safeName.'_'.$scope.'_'.now()->format('Y-m-d_His').'.xlsx';
+
+            return Excel::download($export, $filename);
+        } catch (\Throwable $e) {
+            Log::error('Logsheet import export failed', ['exception' => $e, 'import_id' => $import->id, 'scope' => $scope]);
+
+            return back()->with('error', 'Could not export log sheets. Please try again.');
+        }
+    }
+
+    private function importScope(Request $request): string
+    {
+        $scope = (string) $request->input('status', 'all');
+
+        return in_array($scope, ['completed', 'pending'], true) ? $scope : 'all';
     }
 
     public function store(Request $request): RedirectResponse
@@ -293,6 +426,11 @@ class LogsheetController extends Controller
         $detectedDateTo = $summary['detected_date_to'] ?? null;
 
         $successMsg = "Imported {$rowsImported} rows into {$consolidated} consolidated log sheets. Total ₹{$totalAmount}. Invalid rows: {$invalid}.";
+
+        $skipReason = $summary['skip'] ?? null;
+        if ($skipReason) {
+            return back()->with('error', $skipReason);
+        }
 
         if ($userProvidedRange && ($outOfRangeRows > 0 || $fullyOutOfRangeGroups > 0)) {
             $detectedRange = '';
@@ -441,19 +579,32 @@ class LogsheetController extends Controller
 
     public function destroyImport(LogsheetImport $import): \Illuminate\Http\RedirectResponse
     {
-        // Delete the stored file
-        if ($import->file_path && Storage::disk('public')->exists($import->file_path)) {
-            Storage::disk('public')->delete($import->file_path);
-        }
+        try {
+            DB::transaction(function () use ($import) {
+                // Raw rows are only removed by the observer for numbers that became log sheets.
+                // Invalid/skipped rows still point at this import, so clear them first —
+                // otherwise the foreign key blocks deleting the import row.
+                LogsheetRawRow::where('import_id', $import->id)->delete();
 
-        // Force delete all logsheets associated with this import (will cascade to raw rows and clearings via observer)
-        $logsheets = Logsheet::withTrashed()->where('last_import_id', $import->id)->get();
-        foreach ($logsheets as $logsheet) {
-            $logsheet->forceDelete();
-        }
+                // Delete the stored file
+                if ($import->file_path && Storage::disk('public')->exists($import->file_path)) {
+                    Storage::disk('public')->delete($import->file_path);
+                }
 
-        // Delete the import record (soft delete is fine since logsheets are force deleted)
-        $import->delete();
+                // Force delete all logsheets associated with this import (cascades to details and clearings via observer)
+                $logsheets = Logsheet::withTrashed()->where('last_import_id', $import->id)->get();
+                foreach ($logsheets as $logsheet) {
+                    $logsheet->forceDelete();
+                }
+
+                // Delete the import record
+                $import->delete();
+            });
+        } catch (\Throwable $e) {
+            Log::error('Logsheet import delete failed', ['exception' => $e, 'import_id' => $import->id]);
+
+            return back()->with('error', 'Could not delete this import. Please try again.');
+        }
 
         return redirect()->route('logsheets.index')->with('success', 'Import and all associated data deleted successfully.');
     }

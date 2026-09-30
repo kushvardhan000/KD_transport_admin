@@ -175,10 +175,10 @@ class ExcelExportTest extends TestCase
     {
         $this->actingAsSuperAdmin();
 
-        $this->createLogWithDate('2025-06-15');
+        $log = $this->createLogWithDate('2025-06-15');
 
         $exportUrls = [
-            '/transport-logs/1/export/single',
+            '/transport-logs/' . $log->id . '/export/single',
             '/transport-logs/export/monthly?month=6&year=2025',
             '/transport-logs/export/yearly?year=2025',
             '/transport-logs/export/range?date_from=2025-01-01&date_to=2025-12-31',

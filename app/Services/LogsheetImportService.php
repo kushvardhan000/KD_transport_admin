@@ -416,7 +416,7 @@ class LogsheetImportService
         }
     }
 
-    protected function emptyResult(string $dateFrom, string $dateTo, UploadedFile $file, $user, string $skip): array
+    protected function emptyResult(?string $dateFrom, ?string $dateTo, UploadedFile $file, $user, string $skip): array
     {
         $filePath = $file->store('logsheets', 'public');
         $import = LogsheetImport::create([
@@ -533,6 +533,10 @@ class LogsheetImportService
     protected function findHeaderRow(array $sheet): ?int
     {
         foreach ($sheet as $index => $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+
             $row = array_map(fn ($value) => ! is_string($value) ? (string) $value : trim($value), $row);
             $joined = implode('|', $row);
             if (stripos($joined, 'Log Sheet No') !== false) {

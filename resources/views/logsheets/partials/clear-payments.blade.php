@@ -173,23 +173,23 @@
             <div class="mt-3 grid gap-2 sm:grid-cols-3 text-sm">
                 <div class="rounded-lg bg-emerald-50 px-3 py-2 dark:bg-emerald-900/20">
                     <p class="text-xs text-emerald-700 dark:text-emerald-400">Cleared</p>
-                    <p class="font-semibold text-emerald-700 dark:text-emerald-400" x-text="result.counts.cleared"></p>
+                    <p class="font-semibold text-emerald-700 dark:text-emerald-400" x-text="result?.counts?.cleared"></p>
                 </div>
                 <div class="rounded-lg bg-amber-50 px-3 py-2 dark:bg-amber-900/20">
                     <p class="text-xs text-amber-700 dark:text-amber-400">Already cleared</p>
-                    <p class="font-semibold text-amber-700 dark:text-amber-400" x-text="result.counts.already_cleared"></p>
+                    <p class="font-semibold text-amber-700 dark:text-amber-400" x-text="result?.counts?.already_cleared"></p>
                 </div>
                 <div class="rounded-lg bg-red-50 px-3 py-2 dark:bg-red-900/20">
                     <p class="text-xs text-red-700 dark:text-red-400">Not found</p>
-                    <p class="font-semibold text-red-700 dark:text-red-400" x-text="result.counts.not_found"></p>
+                    <p class="font-semibold text-red-700 dark:text-red-400" x-text="result?.counts?.not_found"></p>
                 </div>
                 <div class="rounded-lg bg-zinc-50 px-3 py-2 dark:bg-zinc-800 sm:col-span-2">
                     <p class="text-xs text-zinc-700 dark:text-zinc-400">Out of range</p>
-                    <p class="font-semibold text-zinc-700 dark:text-zinc-400" x-text="result.counts.out_of_range"></p>
+                    <p class="font-semibold text-zinc-700 dark:text-zinc-400" x-text="result?.counts?.out_of_range"></p>
                 </div>
                 <div class="rounded-lg bg-emerald-50 px-3 py-2 dark:bg-emerald-900/20 sm:col-span-3">
                     <p class="text-xs text-emerald-700 dark:text-emerald-400">Total cleared</p>
-                    <p class="font-mono font-semibold text-emerald-700 dark:text-emerald-400" x-text="'₹' + formatAmount(result.total_cleared_amount)"></p>
+                    <p class="font-mono font-semibold text-emerald-700 dark:text-emerald-400" x-text="'₹' + formatAmount(result?.total_cleared_amount)"></p>
                 </div>
             </div>
         </div>

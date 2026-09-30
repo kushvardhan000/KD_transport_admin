@@ -12,6 +12,20 @@
         'direction' => $sortField === $field && $sortDirection === 'asc' ? 'desc' : 'asc',
     ]));
     $sortIndicator = fn ($field) => $sortField === $field ? ($sortDirection === 'asc' ? '▲' : '▼') : '↕';
+    // Primary export: forwards the exact filter state currently applied to the table.
+    $exportParams = $queryParams;
+    unset($exportParams['scope'], $exportParams['force_scope']);
+    $exportStatusLabel = match ((string) request('status', '')) {
+        'pending' => 'Pending only',
+        'cleared' => 'Cleared only',
+        default => 'Pending + Cleared (2 sheets)',
+    };
+    // Secondary override: keeps every other active filter but ignores the status filter.
+    $overrideParams = $exportParams;
+    unset($overrideParams['status']);
+    $overrideUrl = fn (string $forceScope) => route('logsheets.export') . '?' . http_build_query(array_merge($overrideParams, ['force_scope' => $forceScope]));
+    $exportButtonClass = 'inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium shadow-sm bg-brand-600 text-white hover:bg-brand-700';
+    $overrideLinkClass = 'inline-flex min-h-[44px] items-center justify-center gap-1 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700';
 @endphp
 
 <x-layout.breadcrumb :items="['Dashboard' => route('dashboard'), 'Logsheet Imports' => route('logsheets.index'), 'All Log Sheets' => '#']" />
@@ -38,7 +52,10 @@
             </div>
             <div>
                 <label for="status" class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Status</label>
-                <select id="status" name="status" class="{{ $filterInputClass }}">
+                {{-- Auto-submits like the import-detail select, so the dropdown can never
+                     display a value that has not been applied to the table and the export.
+                     The Apply button stays for the remaining fields and the no-JS path. --}}
+                <select id="status" name="status" x-on:change="$el.form.submit()" class="{{ $filterInputClass }}">
                     <option value="">All Statuses</option>
                     <option value="pending" {{ request('status') === 'pending' ? 'selected' : '' }}>Pending</option>
                     <option value="cleared" {{ request('status') === 'cleared' ? 'selected' : '' }}>Cleared</option>
@@ -60,6 +77,49 @@
             <input type="hidden" name="direction" value="{{ $sortDirection }}">
         </div>
     </form>
+
+    <div class="rounded-xl border border-zinc-200 bg-white p-4 shadow-premium-sm dark:border-zinc-800 dark:bg-zinc-900">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+                <h2 class="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Export Excel</h2>
+                <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                    Exports exactly what is on screen &mdash;
+                    <span class="font-medium text-zinc-700 dark:text-zinc-200">{{ $exportStatusLabel }}</span>
+                    @if($logsheets->total() > 0)
+                        &middot; {{ $logsheets->total() }} matching {{ \Illuminate\Support\Str::plural('log sheet', $logsheets->total()) }}
+                    @endif
+                    .
+                </p>
+            </div>
+            <form method="GET" action="{{ route('logsheets.export') }}">
+                @foreach($exportParams as $exportKey => $exportValue)
+                    @if(is_array($exportValue))
+                        @foreach($exportValue as $exportItem)
+                            <input type="hidden" name="{{ $exportKey }}[]" value="{{ $exportItem }}">
+                        @endforeach
+                    @else
+                        <input type="hidden" name="{{ $exportKey }}" value="{{ $exportValue }}">
+                    @endif
+                @endforeach
+                <button type="submit" class="{{ $exportButtonClass }}">
+                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"/>
+                    </svg>
+                    Export current view
+                </button>
+            </form>
+        </div>
+        <div class="mt-4 flex flex-col gap-2 border-t border-zinc-200 pt-3 sm:flex-row sm:items-center sm:gap-3 dark:border-zinc-800">
+            <span class="text-xs text-zinc-500 dark:text-zinc-400">
+                Override filter (ignores the Status filter above, keeps every other filter):
+            </span>
+            <div class="flex flex-wrap items-center gap-2">
+                <a href="{{ $overrideUrl('all') }}" class="{{ $overrideLinkClass }}">All (2 sheets)</a>
+                <a href="{{ $overrideUrl('pending') }}" class="{{ $overrideLinkClass }}">Pending only</a>
+                <a href="{{ $overrideUrl('cleared') }}" class="{{ $overrideLinkClass }}">Cleared only</a>
+            </div>
+        </div>
+    </div>
 
     <div class="rounded-xl border border-zinc-200 bg-white shadow-premium-sm dark:border-zinc-800 dark:bg-zinc-900">
         <div class="flex flex-col gap-4 border-b border-zinc-200 px-6 py-4 sm:flex-row sm:items-center sm:justify-between dark:border-zinc-800">
@@ -125,10 +185,10 @@
                                 <a href="{{ route('logsheets.show', $logsheet) }}" class="font-semibold text-brand-700 hover:underline dark:text-brand-300">{{ $logsheet->log_sheet_no }}</a>
                             </td>
                             <td class="px-6 py-3 text-zinc-600 dark:text-zinc-400 whitespace-nowrap">
-                                {{ $logsheet->lastImport->date_from?->format('j M Y') ?? '—' }} &rarr; {{ $logsheet->lastImport->date_to?->format('j M Y') ?? '—' }}
+                                {{ $logsheet->lastImport?->date_from?->format('j M Y') ?? '—' }} &rarr; {{ $logsheet->lastImport?->date_to?->format('j M Y') ?? '—' }}
                             </td>
                             <td class="px-6 py-3 text-right font-mono whitespace-nowrap {{ $logsheet->total_actual_amount > 0 ? 'text-red-600 dark:text-red-400' : '' }}">
-                                &#8377;{{ number_format($logsheet->total_actual_amount, 2) }}
+                                &#8377;{{ number_format($logsheet->total_actual_amount ?? 0, 2) }}
                             </td>
                             <td class="px-6 py-3 text-center whitespace-nowrap">
                                 @if($logsheet->status === 'cleared')
@@ -191,7 +251,7 @@
                 <div class="p-4 @if($logsheet->fully_out_of_requested_range) bg-amber-50 dark:bg-amber-900/20 @endif">
                     <div class="flex flex-col gap-1 mb-3">
                         <a href="{{ route('logsheets.show', $logsheet) }}" class="font-semibold text-brand-700 hover:underline dark:text-brand-300">{{ $logsheet->log_sheet_no }}</a>
-                        <span class="text-xs text-zinc-500 dark:text-zinc-400">{{ $logsheet->lastImport->date_from?->format('j M Y') ?? '—' }} &rarr; {{ $logsheet->lastImport->date_to?->format('j M Y') ?? '—' }}</span>
+                        <span class="text-xs text-zinc-500 dark:text-zinc-400">{{ $logsheet->lastImport?->date_from?->format('j M Y') ?? '—' }} &rarr; {{ $logsheet->lastImport?->date_to?->format('j M Y') ?? '—' }}</span>
                         @if($logsheet->fully_out_of_requested_range)
                             <span class="inline-flex items-center gap-1 text-xs font-medium text-amber-600 dark:text-amber-400">
                                 <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -203,7 +263,7 @@
                     </div>
                     <div class="flex items-center justify-between">
                         <span class="font-mono font-semibold text-zinc-900 dark:text-zinc-100 {{ $logsheet->total_actual_amount > 0 ? 'text-red-600 dark:text-red-400' : '' }}">
-                            &#8377;{{ number_format($logsheet->total_actual_amount, 2) }}
+                            &#8377;{{ number_format($logsheet->total_actual_amount ?? 0, 2) }}
                         </span>
                         <div class="flex flex-col gap-2 sm:flex-row">
                             @if($logsheet->status === 'cleared')
