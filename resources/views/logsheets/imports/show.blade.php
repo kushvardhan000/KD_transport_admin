@@ -53,10 +53,10 @@
             <div class="sm:col-span-2">
                 <h3 class="text-lg font-semibold text-zinc-900 dark:text-zinc-100">{{ $import->original_filename }}</h3>
                 <p class="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
-                    Period: {{ $import->date_from?->format('Y-m-d') }} to {{ $import->date_to?->format('Y-m-d') }}
+                    Period: {{ $import->date_from?->format('Y-m-d') ?? '—' }} to {{ $import->date_to?->format('Y-m-d') ?? '—' }}
                 </p>
                 <p class="text-sm text-zinc-500 dark:text-zinc-400">
-                    Uploaded by: {{ $import->uploader?->name ?? '—' }} · {{ $import->created_at?->format('Y-m-d H:i') }}
+                    Uploaded by: {{ $import->uploader?->name ?? '—' }} · {{ $import->created_at?->format('Y-m-d H:i') ?? '—' }}
                 </p>
             </div>
             <div class="text-right sm:text-left">
@@ -69,7 +69,7 @@
             </div>
             <div class="text-right sm:text-left">
                 <p class="text-xs font-medium uppercase tracking-wide text-zinc-500">Diff</p>
-                <p class="mt-1 text-2xl font-semibold tracking-tight {{ $import->total_diff > 0 ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400' }}">₹{{ number_format($import->total_diff ?? 0, 2) }}</p>
+                <p class="mt-1 text-2xl font-semibold tracking-tight {{ ($import->total_diff ?? 0) > 0 ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400' }}">₹{{ number_format($import->total_diff ?? 0, 2) }}</p>
             </div>
             <div class="text-right sm:text-left">
                 <p class="text-xs font-medium uppercase tracking-wide text-zinc-500">Gross Wt</p>
@@ -91,6 +91,56 @@
             </div>
         </div>
     </div>
+
+    <!-- Import Diagnostics: why a tolerant import did not get everything -->
+    @php
+        $importWarnings = is_array($import->warnings) ? $import->warnings : [];
+        $importError = $importWarnings['error'] ?? null;
+        $importNotes = is_array($importWarnings['notes'] ?? null) ? $importWarnings['notes'] : [];
+        $importUnparseable = is_array($importWarnings['unparseable_values'] ?? null) ? $importWarnings['unparseable_values'] : [];
+        $importMissingOptional = is_array($importWarnings['missing_optional_columns'] ?? null) ? $importWarnings['missing_optional_columns'] : [];
+        $importBlankCounts = array_filter([
+            'without Invoice No' => (int) ($importWarnings['blank_invoice_no_rows'] ?? 0),
+            'without Invoice Date' => (int) ($importWarnings['blank_invoice_date_rows'] ?? 0),
+            'without Date' => (int) ($importWarnings['blank_date_rows'] ?? 0),
+            'empty rows skipped' => (int) ($importWarnings['blank_rows_skipped'] ?? 0),
+        ], fn ($count) => $count > 0);
+    @endphp
+    @if($import->status === 'invalid' || $importError)
+        <div class="rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20">
+            <h3 class="text-sm font-semibold text-red-800 dark:text-red-300">This import could not be read</h3>
+            <p class="mt-1 text-sm text-red-700 dark:text-red-400">
+                {{ $importError ?? 'The file did not contain the required columns, so nothing was imported.' }}
+            </p>
+            <p class="mt-1 text-xs text-red-600 dark:text-red-500">
+                Nothing was stored for this file.
+            </p>
+        </div>
+    @endif
+    @if(!empty($importNotes) || !empty($importUnparseable) || !empty($importMissingOptional) || !empty($importBlankCounts))
+        <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20">
+            <h3 class="text-sm font-semibold text-amber-800 dark:text-amber-300">Imported with warnings</h3>
+            <ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-700 dark:text-amber-400">
+                @foreach($importNotes as $note)
+                    <li>{{ $note }}</li>
+                @endforeach
+                @if(!empty($importUnparseable))
+                    <li>
+                        Values that could not be read (left blank):
+                        @foreach($importUnparseable as $column => $count)
+                            <span class="font-medium">{{ $column }} ({{ $count }})</span>@if(!$loop->last), @endif
+                        @endforeach
+                    </li>
+                @endif
+                @if(!empty($importMissingOptional))
+                    <li>Optional columns not present in the file: {{ implode(', ', $importMissingOptional) }}.</li>
+                @endif
+                @foreach($importBlankCounts as $label => $count)
+                    <li>{{ $count }} row(s) {{ $label }}.</li>
+                @endforeach
+            </ul>
+        </div>
+    @endif
 
     <!-- Log Sheets Table -->
     <div class="rounded-xl border border-zinc-200 bg-white shadow-premium-sm dark:border-zinc-800 dark:bg-zinc-900">
@@ -155,7 +205,7 @@
                                 </td>
                                 <td class="px-6 py-3 text-right font-mono whitespace-nowrap">{{ number_format($logsheet->total_actual_amount ?? 0, 2) }}</td>
                                 <td class="px-6 py-3 text-right font-mono whitespace-nowrap">{{ number_format($logsheet->total_booked_amount ?? 0, 2) }}</td>
-                                <td class="px-6 py-3 text-right font-mono {{ $logsheet->total_diff > 0 ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400' }} whitespace-nowrap">{{ number_format($logsheet->total_diff ?? 0, 2) }}</td>
+                                <td class="px-6 py-3 text-right font-mono {{ ($logsheet->total_diff ?? 0) > 0 ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400' }} whitespace-nowrap">{{ number_format($logsheet->total_diff ?? 0, 2) }}</td>
                                 <td class="px-6 py-3 text-right font-mono whitespace-nowrap">{{ number_format($logsheet->total_gross_wt ?? 0, 3) }}</td>
                                 <td class="px-6 py-3 text-center font-mono whitespace-nowrap">{{ $logsheet->consignment_count }}</td>
                                 <td class="px-6 py-3 text-center whitespace-nowrap">
@@ -281,7 +331,7 @@
                                 <td class="px-6 py-3 whitespace-nowrap">{{ $row->log_sheet_no ?? '—' }}</td>
                                 <td class="px-6 py-3 text-red-600 dark:text-red-400 whitespace-nowrap">{{ $row->validation_error }}</td>
                                 <td class="px-6 py-3 max-w-xs">
-                                    <pre class="text-xs text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap overflow-auto max-h-24">{{ json_encode($row->raw_data, JSON_PRETTY_PRINT) }}</pre>
+                                    <pre class="text-xs text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap overflow-auto max-h-24">{{ \App\Services\LogsheetValueParser::jsonSafe($row->raw_data) }}</pre>
                                 </td>
                             </tr>
                         @endforeach

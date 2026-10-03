@@ -22,6 +22,7 @@ class LogsheetImport extends Model
         'duplicate_count',
         'invalid_count',
         'status',
+        'warnings',
         'total_amount',
         'total_booked_amount',
         'total_diff',
@@ -34,6 +35,7 @@ class LogsheetImport extends Model
     protected $casts = [
         'date_from' => 'date',
         'date_to' => 'date',
+        'warnings' => 'array',
         'total_amount' => 'decimal:2',
         'total_booked_amount' => 'decimal:2',
         'total_diff' => 'decimal:2',

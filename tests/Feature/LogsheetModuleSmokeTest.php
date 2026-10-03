@@ -527,7 +527,11 @@ class LogsheetModuleSmokeTest extends TestCase
         ]);
 
         $response->assertRedirect('/logsheets');
-        $this->assertStringContainsString('Missing Log Sheet No header', (string) $response->getSession()->get('error'));
+        // FX-2: the message now names every required column instead of only
+        // complaining about "Log Sheet No"; the graceful failure itself
+        // (redirect + error flash + no success) is unchanged.
+        $this->assertStringContainsString('No header row found', (string) $response->getSession()->get('error'));
+        $this->assertStringContainsString('Log Sheet No, Date, Invoice No, Invoice Date', (string) $response->getSession()->get('error'));
         $this->assertNull($response->getSession()->get('success'));
 
         $this->get(route('logsheets.index'))->assertStatus(200);

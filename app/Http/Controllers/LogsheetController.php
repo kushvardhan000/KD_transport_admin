@@ -24,6 +24,55 @@ class LogsheetController extends Controller
 {
     private const IMPORT_PAGE_SIZE = 25;
 
+    /**
+     * Rows per page for the detail and raw-row tables on the log sheet page.
+     */
+    private const DETAIL_PAGE_SIZE = 100;
+
+    /**
+     * How many extra_fields / raw_data rows are scanned when working out which
+     * dynamic columns exist. Keeps the header scan O(1) page loads for a
+     * realistic sheet while still covering far more rows than one page shows.
+     */
+    private const EXTRA_KEY_SCAN_LIMIT = 1000;
+
+    /**
+     * Optional consignment-detail columns: key => [header label, value type].
+     *
+     * `date` columns are formatted, `number:N` columns are right-aligned and
+     * rendered with N decimals, everything else is a plain string. A column is
+     * only rendered when at least one detail row actually has a value for it.
+     *
+     * @var array<string, array{0: string, 1: string}>
+     */
+    private const DETAIL_COLUMNS = [
+        'payer' => ['Payer', 'text'],
+        'payer_name' => ['Payer Name', 'text'],
+        'town' => ['Town', 'text'],
+        'town_2' => ['Town 2', 'text'],
+        'gross_wt' => ['Gross Wt', 'number:3'],
+        'difference_placeholder' => ['Difference', 'number:3'],
+        'diff' => ['Diff', 'number:2'],
+        'amount' => ['Amount', 'number:2'],
+        'volume' => ['Volume', 'number:3'],
+        'tprt_code' => ['TPRT Code', 'text'],
+        'tprt_name' => ['TPRT Name', 'text'],
+        'container_id' => ['Container', 'text'],
+        'destination' => ['Destination', 'text'],
+        'sap_invoice_no' => ['SAP Inv No', 'text'],
+        'posting_date' => ['Posting', 'date'],
+        'bill_date' => ['Bill', 'date'],
+        'vendor_inv_no' => ['Vendor Inv', 'text'],
+        'route' => ['Route', 'text'],
+        'gross_weight_2' => ['Gross Wt 2', 'number:3'],
+        'booked_amount' => ['Booked Amt', 'number:2'],
+        'actual_rate' => ['Actual Rate', 'number:2'],
+        'actual_amount' => ['Actual Amt', 'number:2'],
+        'time' => ['Time', 'text'],
+        'cust_group' => ['Cust Group', 'text'],
+        'no_of_packs' => ['Packs', 'number:0'],
+    ];
+
     public function __construct(
         private LogsheetImportService $importService,
         private LogsheetClearingService $clearingService
@@ -410,7 +459,15 @@ class LogsheetController extends Controller
         try {
             $summary = $this->importService->import($file, $dateFrom, $dateTo);
         } catch (\Throwable $e) {
-            return back()->withInput()->with('error', 'Import failed: ' . $e->getMessage());
+            // Never leak raw exception text (paths, SQL, driver messages) to
+            // the browser — it is logged instead.
+            \Log::error('Logsheet import failed', [
+                'file' => $file->getClientOriginalName(),
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return back()->withInput()->with('error', 'Import failed. Please check the file and try again.');
         }
 
         \Log::info('Import summary', $summary);
@@ -424,6 +481,7 @@ class LogsheetController extends Controller
         $userProvidedRange = $summary['user_provided_range'] ?? false;
         $detectedDateFrom = $summary['detected_date_from'] ?? null;
         $detectedDateTo = $summary['detected_date_to'] ?? null;
+        $warnings = $summary['warnings'] ?? [];
 
         $successMsg = "Imported {$rowsImported} rows into {$consolidated} consolidated log sheets. Total ₹{$totalAmount}. Invalid rows: {$invalid}.";
 
@@ -431,6 +489,8 @@ class LogsheetController extends Controller
         if ($skipReason) {
             return back()->with('error', $skipReason);
         }
+
+        $warningMessages = $this->importWarningMessages($warnings);
 
         if ($userProvidedRange && ($outOfRangeRows > 0 || $fullyOutOfRangeGroups > 0)) {
             $detectedRange = '';
@@ -446,24 +506,203 @@ class LogsheetController extends Controller
                 $outOfRangeDetails[] = "{$fullyOutOfRangeGroups} log sheets completely outside the range (flagged)";
             }
             $warningMsg = $detectedRange . $requestedRange . implode(' and ', $outOfRangeDetails) . ' fell outside this range.';
-            return back()->with('success', $warningMsg . ' ' . $successMsg);
+            $response = back()->with('success', $warningMsg . ' ' . $successMsg);
+
+            return $warningMessages
+                ? $response->with('warning', implode(' ', $warningMessages))
+                : $response;
         }
 
-        return back()->with('success', $successMsg);
+        $response = back()->with('success', $successMsg);
+
+        return $warningMessages
+            ? $response->with('warning', implode(' ', $warningMessages))
+            : $response;
+    }
+
+    /**
+     * Turn the import's compact warning counts into short, human sentences.
+     *
+     * @param  array<string, mixed>  $warnings
+     * @return array<int, string>
+     */
+    protected function importWarningMessages(array $warnings): array
+    {
+        $messages = [];
+
+        foreach (($warnings['notes'] ?? []) as $note) {
+            $messages[] = (string) $note;
+        }
+
+        $missing = $warnings['missing_optional_columns'] ?? [];
+        if (is_array($missing) && ! empty($missing)) {
+            $messages[] = 'Optional columns not found in the file: ' . implode(', ', $missing) . '. They were left blank.';
+        }
+
+        $unparseable = $warnings['unparseable_values'] ?? [];
+        if (is_array($unparseable) && ! empty($unparseable)) {
+            $parts = [];
+            foreach ($unparseable as $column => $count) {
+                $parts[] = "{$column} ({$count})";
+            }
+            $messages[] = 'Some values could not be read and were left blank: ' . implode(', ', $parts) . '.';
+        }
+
+        $blankInvoiceNo = (int) ($warnings['blank_invoice_no_rows'] ?? 0);
+        $blankInvDate = (int) ($warnings['blank_invoice_date_rows'] ?? 0);
+        $blankDate = (int) ($warnings['blank_date_rows'] ?? 0);
+        if ($blankInvoiceNo > 0 || $blankInvDate > 0 || $blankDate > 0) {
+            $parts = [];
+            if ($blankInvoiceNo > 0) {
+                $parts[] = "{$blankInvoiceNo} without Invoice No";
+            }
+            if ($blankInvDate > 0) {
+                $parts[] = "{$blankInvDate} without Invoice Date";
+            }
+            if ($blankDate > 0) {
+                $parts[] = "{$blankDate} without Date";
+            }
+            $messages[] = 'Imported with blanks: ' . implode(', ', $parts) . '.';
+        }
+
+        $blankRows = (int) ($warnings['blank_rows_skipped'] ?? 0);
+        if ($blankRows > 0) {
+            $messages[] = "{$blankRows} empty rows were skipped.";
+        }
+
+        return $messages;
     }
 
     public function show(Logsheet $logsheet): View
     {
-        $logsheet->load(['details', 'lastImport', 'clearings.clearer']);
+        $logsheet->load(['lastImport', 'clearings.clearer']);
+
+        $details = $logsheet->details()
+            ->orderBy('id')
+            ->paginate(self::DETAIL_PAGE_SIZE, ['*'], 'details_page')
+            ->withQueryString();
 
         $rawRows = LogsheetRawRow::where('log_sheet_no', $logsheet->log_sheet_no)
             ->orderBy('row_number_in_file')
-            ->get();
+            ->orderBy('id')
+            ->paginate(self::DETAIL_PAGE_SIZE, ['*'], 'raw_page')
+            ->withQueryString();
 
         return view('logsheets.show', [
             'logsheet' => $logsheet,
+            'details' => $details,
             'rawRows' => $rawRows,
+            'visibleColumns' => $this->visibleDetailColumns($logsheet),
+            'rawColumns' => $this->rawRowColumns($logsheet),
+            'extraFieldKeys' => $this->extraFieldKeys($logsheet),
         ]);
+    }
+
+    /**
+     * The optional detail columns that actually carry a value somewhere in
+     * this log sheet.
+     *
+     * One aggregate query covers *all* of the log sheet's details, not just the
+     * current page, so a column never appears and disappears as the user pages
+     * back and forth. A column with nothing in it is simply not rendered.
+     *
+     * @return array<int, array{key: string, label: string, type: string}>
+     */
+    protected function visibleDetailColumns(Logsheet $logsheet): array
+    {
+        $hasValue = LogsheetDetail::where('logsheet_id', $logsheet->id)
+            ->selectRaw(implode(', ', array_map(
+                fn (string $column) => "MAX(CASE WHEN {$column} IS NOT NULL AND {$column} <> '' THEN 1 ELSE 0 END) AS has_{$column}",
+                array_keys(self::DETAIL_COLUMNS)
+            )))
+            ->first();
+
+        $visible = [];
+        foreach (self::DETAIL_COLUMNS as $key => $spec) {
+            if ((int) ($hasValue->{'has_' . $key} ?? 0) === 1) {
+                $visible[] = ['key' => $key, 'label' => $spec[0], 'type' => $spec[1]];
+            }
+        }
+
+        return $visible;
+    }
+
+    /**
+     * The union of the extra_fields keys used anywhere in this log sheet.
+     *
+     * @return array<int, string>
+     */
+    protected function extraFieldKeys(Logsheet $logsheet): array
+    {
+        $rows = LogsheetDetail::where('logsheet_id', $logsheet->id)
+            ->whereNotNull('extra_fields')
+            ->select('extra_fields')
+            ->limit(self::EXTRA_KEY_SCAN_LIMIT)
+            ->pluck('extra_fields');
+
+        $keys = [];
+        foreach ($rows as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            foreach (array_keys($row) as $key) {
+                $keys[(string) $key] = true;
+            }
+        }
+
+        return array_keys($keys);
+    }
+
+    /**
+     * Column headers for the raw imported rows, built from the keys actually
+     * present in raw_data rather than a hard-coded list, so a 4-column import
+     * and a 40-column import both render a correct table.
+     *
+     * @return array<int, string>
+     */
+    protected function rawRowColumns(Logsheet $logsheet): array
+    {
+        $rows = LogsheetRawRow::where('log_sheet_no', $logsheet->log_sheet_no)
+            ->select('raw_data')
+            ->limit(self::EXTRA_KEY_SCAN_LIMIT)
+            ->pluck('raw_data');
+
+        $keys = [];
+        foreach ($rows as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            foreach (array_keys($row) as $key) {
+                $keys[(string) $key] = true;
+            }
+        }
+
+        $columns = [];
+        foreach (array_keys($keys) as $key) {
+            $columns[$key] = self::humanizeHeader($key);
+        }
+
+        return $columns;
+    }
+
+    /**
+     * Pretty-print a raw column key, but never mangle one that a user wrote:
+     * anything containing markup characters is shown exactly as it arrived so
+     * the page proves it was escaped rather than quietly rewriting it.
+     */
+    protected static function humanizeHeader(string $key): string
+    {
+        $trimmed = trim($key);
+
+        if ($trimmed === '') {
+            return 'Column';
+        }
+
+        if (strpbrk($trimmed, '<>&"\'') !== false || mb_strlen($trimmed) > 60) {
+            return $trimmed;
+        }
+
+        return \Illuminate\Support\Str::headline($trimmed);
     }
 
     public function clearPreview(Request $request): JsonResponse

@@ -18,6 +18,12 @@ use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 
 class LogsheetsSheetExport implements FromQuery, WithHeadings, WithMapping, WithTitle, WithColumnFormatting, ShouldAutoSize, WithStyles, WithEvents
 {
+    /**
+     * The 1-based column positions whose values must reach the file as text, so
+     * a log sheet number, transporter code, SAP invoice number or vendor invoice
+     * number keeps its leading zeros instead of being rounded to a number by
+     * Excel. The list is part of the export contract and is unchanged.
+     */
     private const TEXT_COLUMNS = [1, 4, 7, 10];
 
     private Builder $query;
@@ -88,33 +94,76 @@ class LogsheetsSheetExport implements FromQuery, WithHeadings, WithMapping, With
         }
 
         return [
-            (string) ($row->log_sheet_no ?? ''),
+            $this->text($row->log_sheet_no),
             $this->formatDate($row->date),
-            (string) ($row->vehicle_no ?? ''),
-            (string) ($row->tprt_code ?? ''),
-            (string) ($row->tprt_name ?? ''),
-            (string) ($row->destination ?? ''),
-            (string) ($row->sap_invoice_no ?? ''),
+            $this->text($row->vehicle_no),
+            $this->text($row->tprt_code),
+            $this->text($row->tprt_name),
+            $this->text($row->destination),
+            $this->text($row->sap_invoice_no),
             $this->formatDate($row->posting_date),
             $this->formatDate($row->bill_date),
-            (string) ($row->vendor_inv_no ?? ''),
+            $this->text($row->vendor_inv_no),
             (int) ($row->consignment_count ?? 0),
             (float) ($row->total_gross_wt ?? 0),
             (float) ($row->total_booked_amount ?? 0),
             (float) ($row->total_actual_amount ?? 0),
             (float) ($row->total_diff ?? 0),
-            (string) ($row->status ?? ''),
+            $this->text($row->status),
             $this->formatDateTime($row->cleared_at),
-            (string) ($row->clearer?->name ?? ''),
-            (string) ($import?->original_filename ?? ''),
+            $this->text($row->clearer?->name),
+            $this->text($import?->original_filename),
             $period,
         ];
+    }
+
+    /**
+     * Render any column value as the plain string a spreadsheet cell can hold.
+     *
+     * A flexible import stores whatever the client's cell contained, so a
+     * column that is normally a string is not guaranteed to be one: a JSON
+     * value, a boolean or a nested array would otherwise raise an
+     * "Array to string conversion" and fail the whole export, taking the
+     * download with it. NULL stays an empty cell.
+     */
+    private function text($value): string
+    {
+        if ($value === null) {
+            return '';
+        }
+
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+
+        if (is_array($value)) {
+            $encoded = json_encode($value, JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+            return $encoded === false ? '' : $encoded;
+        }
+
+        if (is_object($value)) {
+            return $this->text(json_decode(json_encode($value, JSON_INVALID_UTF8_SUBSTITUTE) ?: [], true));
+        }
+
+        if (is_float($value)) {
+            // Keeps 45350959.0 from being written as 4.5350959E+7.
+            return fmod($value, 1.0) === 0.0 && is_finite($value)
+                ? number_format($value, 0, '.', '')
+                : rtrim(rtrim(sprintf('%.10F', $value), '0'), '.');
+        }
+
+        return (string) $value;
     }
 
     private function formatDate($value): string
     {
         if ($value === null || $value === '') {
             return '';
+        }
+
+        if (! is_scalar($value) && ! $value instanceof \DateTimeInterface) {
+            return $this->text($value);
         }
 
         if ($value instanceof \DateTimeInterface) {
@@ -124,7 +173,7 @@ class LogsheetsSheetExport implements FromQuery, WithHeadings, WithMapping, With
         try {
             return \Illuminate\Support\Carbon::parse($value)->format('Y-m-d');
         } catch (\Throwable $e) {
-            return (string) $value;
+            return $this->text($value);
         }
     }
 
@@ -134,6 +183,10 @@ class LogsheetsSheetExport implements FromQuery, WithHeadings, WithMapping, With
             return '';
         }
 
+        if (! is_scalar($value) && ! $value instanceof \DateTimeInterface) {
+            return $this->text($value);
+        }
+
         if ($value instanceof \DateTimeInterface) {
             return $value->format('Y-m-d H:i');
         }
@@ -141,7 +194,7 @@ class LogsheetsSheetExport implements FromQuery, WithHeadings, WithMapping, With
         try {
             return \Illuminate\Support\Carbon::parse($value)->format('Y-m-d H:i');
         } catch (\Throwable $e) {
-            return (string) $value;
+            return $this->text($value);
         }
     }
 

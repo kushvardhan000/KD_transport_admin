@@ -7,7 +7,6 @@ use App\Models\LogsheetDetail;
 use App\Models\User;
 use App\Services\ActivityLogger;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 
 class LogsheetClearingService
 {
@@ -17,37 +16,36 @@ class LogsheetClearingService
         private ActivityLogger $activityLogger
     ) {}
 
+    /**
+     * Turn whatever the user typed into canonical Log Sheet No tokens.
+     *
+     * The per-token rules are NOT re-implemented here: they are
+     * LogsheetValueParser::logSheetNo(), the same function the importer uses
+     * when it stores a log sheet number. That is what makes a clearing always
+     * find the row its import created (root cause 14 in PROJECT_ANALYSIS).
+     * Splitting on separators, de-duplicating and the 500 cap are this
+     * service's own behaviour and are kept.
+     *
+     * @param  array<int, mixed>|string  $input
+     * @return array<int, string>
+     */
     public function normalize(array|string $input): array
     {
         $numbers = is_string($input) ? [$input] : $input;
         $normalized = [];
 
         foreach ($numbers as $num) {
-            $str = trim((string) $num);
-            if ($str === '') {
+            $token = LogsheetValueParser::logSheetNo($num);
+            if ($token === null) {
                 continue;
             }
 
-            $str = trim($str, "\"'");
-
-            if (Str::endsWith($str, '.0')) {
-                $str = substr($str, 0, -2);
-            }
-
-            // Check if string represents zero (all zeros, optionally with decimal point)
-            $isZero = preg_match('/^0+(\.0+)?$/', $str) === 1;
-            if ($isZero) {
-                $str = '0';
-            } else {
-                $str = ltrim($str, '0');
-                if ($str === '') {
-                    $str = '0';
-                }
-            }
-
-            $parts = preg_split('/[\s,;|]+/', $str, -1, PREG_SPLIT_NO_EMPTY);
+            $parts = preg_split('/[\s,;|]+/', $token, -1, PREG_SPLIT_NO_EMPTY);
             foreach ($parts as $part) {
-                if ($part !== '') {
+                // A separator can split a number in half ("45350 959"), so the
+                // part is normalized again rather than trusted.
+                $part = LogsheetValueParser::logSheetNo($part);
+                if ($part !== null && $part !== '') {
                     $normalized[] = $part;
                 }
             }
@@ -110,7 +108,9 @@ class LogsheetClearingService
                 $status = $logsheet->status;
                 $amount = (string) $logsheet->total_actual_amount;
 
-                // Count detail rows for this log_sheet_no within the period (from ALL imports)
+                // Count detail rows for this log_sheet_no within the period (from ALL imports).
+                // A NULL date behaves exactly like the log sheet's: excluded when a
+                // period is set, counted when it is not.
                 $detailQuery = LogsheetDetail::where('log_sheet_no', $num);
                 if ($dateFrom) {
                     $detailQuery->whereDate('date', '>=', $dateFrom);
@@ -224,7 +224,9 @@ class LogsheetClearingService
                     ]);
                 }
 
-                // Clear ALL detail rows with this log_sheet_no inside the period (from ALL imports)
+                // Clear ALL detail rows with this log_sheet_no inside the period (from ALL imports).
+                // A range-less clear therefore also clears the null-dated rows of a
+                // minimal import, which is what the user asked for by not giving a range.
                 $detailQuery = LogsheetDetail::where('log_sheet_no', $num);
                 if ($dateFrom) {
                     $detailQuery->whereDate('date', '>=', $dateFrom);
@@ -294,6 +296,19 @@ class LogsheetClearingService
         return $this->clear([$number], null, null, $user);
     }
 
+    /**
+     * Constrain a log sheet query to the requested period.
+     *
+     * A NULL `date` is deliberately left out of any constrained result: a
+     * flexible import accepts a workbook whose Date column is blank or
+     * unreadable, so a null-dated log sheet cannot be proven to be inside the
+     * period the user asked for. It is therefore reported as `out_of_range`
+     * when a range is set, and is completely unconstrained (so it clears
+     * normally) when no range is set. This is the SQL comparison's own
+     * behaviour on NULL, stated here because the whole module depends on it.
+     *
+     * @param  \Illuminate\Database\Eloquent\Builder<Logsheet>|\Illuminate\Database\Query\Builder  $query
+     */
     private function applyDateRange($query, ?string $dateFrom, ?string $dateTo): void
     {
         if ($dateFrom) {

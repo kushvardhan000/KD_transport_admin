@@ -204,7 +204,7 @@
                 <p class="mb-4 text-sm text-zinc-600 dark:text-zinc-400">Are you sure you want to mark <strong x-text="pendingCount"></strong> log sheet(s) as cleared?</p>
                 <p class="mb-4 text-sm text-zinc-600 dark:text-zinc-400">Total amount: <strong class="font-mono" x-text="'₹' + formatAmount(previewTotalPending)"></strong></p>
                 <div class="flex justify-end gap-3">
-                    <button type="button" @click="closeModal()" class="inline-flex h-10 items-center justify-center rounded-lg border border-zinc-300 px-4 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancel</button>
+                    <button type="button" data-clear-cancel @click="closeModal()" class="inline-flex h-10 items-center justify-center rounded-lg border border-zinc-300 px-4 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancel</button>
                     <button type="button" @click="confirmClear()" :disabled="submitting" class="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed">
                         <svg x-show="submitting" class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>

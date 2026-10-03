@@ -214,20 +214,23 @@
                             <td class="px-6 py-4 whitespace-nowrap">
                                 <div>
                                     <span class="font-medium text-zinc-900 dark:text-zinc-100">
-                                        {{ $import->date_from?->format('j M Y') }} &rarr; {{ $import->date_to?->format('j M Y') }}
+                                        {{ $import->date_from?->format('j M Y') ?? '—' }} &rarr; {{ $import->date_to?->format('j M Y') ?? '—' }}
                                     </span>
                                     <br>
-                                    <span class="text-xs text-zinc-500 dark:text-zinc-400">{{ $import->original_filename }}</span>
+                                    <span class="text-xs text-zinc-500 dark:text-zinc-400">{{ $import->original_filename ?? '—' }}</span>
                                 </div>
                             </td>
                             <td class="px-6 py-4 text-right font-mono whitespace-nowrap">
-                                <span class="{{ $import->total_amount > 0 ? 'text-red-600 dark:text-red-400' : '' }}">&#8377;{{ number_format($import->total_amount, 2) }}</span>
+                                <span class="{{ ($import->total_amount ?? 0) > 0 ? 'text-red-600 dark:text-red-400' : '' }}">&#8377;{{ number_format($import->total_amount ?? 0, 2) }}</span>
                             </td>
                             <td class="px-6 py-4 text-center whitespace-nowrap">
                                 @php
-                                    $cleared = $import->cleared_count ?? 0;
-                                    $total = $import->log_sheet_numbers_count ?? 0;
-                                    if ($cleared === 0) {
+                                    // Both counts come from sub-selects and are
+                                    // therefore never null, but a 0/0 import must
+                                    // still not divide or compare against null.
+                                    $cleared = (int) ($import->cleared_count ?? 0);
+                                    $total = (int) ($import->log_sheet_numbers_count ?? 0);
+                                    if ($total === 0 || $cleared === 0) {
                                         $badge = '<span class="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800 dark:bg-amber-900/30 dark:text-amber-400"><span class="h-1.5 w-1.5 rounded-full bg-amber-600"></span>Pending</span>';
                                     } elseif ($cleared === $total) {
                                         $badge = '<span class="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"><span class="h-1.5 w-1.5 rounded-full bg-emerald-600"></span>Cleared</span>';
@@ -297,14 +300,14 @@
                 <div class="p-4">
                     <div class="flex flex-col gap-1 mb-3">
                         <span class="font-medium text-zinc-900 dark:text-zinc-100">
-                            {{ $import->date_from?->format('j M Y') }} &rarr; {{ $import->date_to?->format('j M Y') }}
+                            {{ $import->date_from?->format('j M Y') ?? '—' }} &rarr; {{ $import->date_to?->format('j M Y') ?? '—' }}
                         </span>
-                        <span class="text-xs text-zinc-500 dark:text-zinc-400">{{ $import->original_filename }}</span>
-                        <span class="text-xs text-zinc-500 dark:text-zinc-400">Cleared {{ $import->cleared_count }} of {{ $import->logsheets_count }}</span>
+                        <span class="text-xs text-zinc-500 dark:text-zinc-400">{{ $import->original_filename ?? '—' }}</span>
+                        <span class="text-xs text-zinc-500 dark:text-zinc-400">Cleared {{ (int) ($import->cleared_count ?? 0) }} of {{ (int) ($import->log_sheet_numbers_count ?? 0) }}</span>
                     </div>
                     <div class="flex items-center justify-between">
                         <span class="font-mono font-semibold text-zinc-900 dark:text-zinc-100">
-                            <span class="{{ $import->total_amount > 0 ? 'text-red-600 dark:text-red-400' : '' }}">&#8377;{{ number_format($import->total_amount, 2) }}</span>
+                            <span class="{{ ($import->total_amount ?? 0) > 0 ? 'text-red-600 dark:text-red-400' : '' }}">&#8377;{{ number_format($import->total_amount ?? 0, 2) }}</span>
                         </span>
 <div class="flex gap-2">
                             @php

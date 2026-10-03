@@ -629,7 +629,7 @@ Alpine.data('logsheetClear', () => ({
         if (this.pendingCount === 0) return;
         this.showModal = true;
         this.$nextTick(() => {
-            const cancelBtn = this.$root.querySelector('button[aria-label="Cancel"]') || this.$root.querySelector('button:contains("Cancel")');
+            const cancelBtn = this.$root.querySelector('[data-clear-cancel]');
             if (cancelBtn) cancelBtn.focus();
         });
     },

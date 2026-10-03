@@ -187,7 +187,7 @@
                             <td class="px-6 py-3 text-zinc-600 dark:text-zinc-400 whitespace-nowrap">
                                 {{ $logsheet->lastImport?->date_from?->format('j M Y') ?? '—' }} &rarr; {{ $logsheet->lastImport?->date_to?->format('j M Y') ?? '—' }}
                             </td>
-                            <td class="px-6 py-3 text-right font-mono whitespace-nowrap {{ $logsheet->total_actual_amount > 0 ? 'text-red-600 dark:text-red-400' : '' }}">
+                            <td class="px-6 py-3 text-right font-mono whitespace-nowrap {{ ($logsheet->total_actual_amount ?? 0) > 0 ? 'text-red-600 dark:text-red-400' : '' }}">
                                 &#8377;{{ number_format($logsheet->total_actual_amount ?? 0, 2) }}
                             </td>
                             <td class="px-6 py-3 text-center whitespace-nowrap">
@@ -262,7 +262,7 @@
                         @endif
                     </div>
                     <div class="flex items-center justify-between">
-                        <span class="font-mono font-semibold text-zinc-900 dark:text-zinc-100 {{ $logsheet->total_actual_amount > 0 ? 'text-red-600 dark:text-red-400' : '' }}">
+                        <span class="font-mono font-semibold text-zinc-900 dark:text-zinc-100 {{ ($logsheet->total_actual_amount ?? 0) > 0 ? 'text-red-600 dark:text-red-400' : '' }}">
                             &#8377;{{ number_format($logsheet->total_actual_amount ?? 0, 2) }}
                         </span>
                         <div class="flex flex-col gap-2 sm:flex-row">
